@@ -104,3 +104,5 @@ class CFGExtraAnalysis:
 #
 #     cfg = project.analyses.CFG()
 #     c = CFGExtraAnalysis(cfg)
+#     c.call_check('caller', 'called')
+#     c.call_check(0x400248, 'called')
