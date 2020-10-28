@@ -2,20 +2,22 @@
 
 import angr
 import numpy
+import logging
+import zlib
+import pickle
+
+l = logging.getLogger(__name__)
+l.addHandler(logging.StreamHandler())
+l.setLevel(logging.DEBUG)
 
 
-def print_matrix(matrix):
-    m = matrix
-    if isinstance(matrix, numpy.matrix):
-        m = m.tolist()
-    for r in m:
-        print(' '.join(str(c) for c in r))
 
 
 class CFGExtraAnalysis:
 
     def __init__(self, cfg):
         self.cfg = cfg
+        self.filename = cfg.project.filename
         # Remove duplicate functions (plt and got entries both populate)
         # we want something to use as a reference for colum/row indices
         self.functions = list(set(cfg.functions.values()))
@@ -30,9 +32,9 @@ class CFGExtraAnalysis:
         for _ in empty_row:
             function_call_matrix.append(empty_row.copy())
         self.function_call_matrix = function_call_matrix
-        self.direct_call_matrix = None
-        self.indirect_call_matrix = None
-        self._create_call_matrix()
+        # looks bad, but supports pickling
+        self.direct_call_matrix = None if not hasattr(self, 'direct_call_matrix') else self.direct_call_matrix
+        self.indirect_call_matrix = None if not hasattr(self, 'indirect_call_matrix') else self.indirect_call_matrix
 
     @staticmethod
     def create_indirect_call_matrix(m):
@@ -46,11 +48,15 @@ class CFGExtraAnalysis:
         for i in range(0, max_power):
             m0 = m @ m0
             mask = m0 | mask
+            # really gross conversion to binary matrix here, but the cpu on
+            # my laptop can only hold on for so long
+            mask = mask > 0
+            mask = mask.astype(numpy.int)
 
         B = mask > 0
         return B.astype(numpy.int)
 
-    def _create_call_matrix(self):
+    def create_direct_call_matrix(self):
         # create an initial matrix to represent caller functions
         # and the functions called by them
         func_ind = self.functions.index
@@ -74,6 +80,9 @@ class CFGExtraAnalysis:
 
         self.direct_call_matrix = numpy.matrix(self.function_call_matrix)
 
+    def create_own_indirect_call_matrix(self):
+        if self.direct_call_matrix is None:
+            self.create_direct_call_matrix()
         # Completely ignore computational complexity, just throw around
         # dot products like we're rolling in spare processors
         self.indirect_call_matrix = self.create_indirect_call_matrix(self.direct_call_matrix)
@@ -90,6 +99,30 @@ class CFGExtraAnalysis:
         called_ind = self.functions.index(self.cfg.functions[called])
         return bool(self.direct_call_matrix[called_ind].item(caller_ind))
 
+    @staticmethod
+    def print_matrix(matrix):
+        m = matrix
+        if isinstance(matrix, numpy.matrix):
+            m = m.tolist()
+        for r in m:
+            print(' '.join(str(c) for c in r))
+
+
+    def __getstate__(self):
+        d = dict((k, v) for k, v in self.__dict__.items() if k not in {'cfg', 'functions'})
+        pickled = pickle.dumps(d)
+        compressed = zlib.compress(pickled)
+        return compressed
+
+    def __setstate__(self, s):
+        pickled = zlib.decompress(s)
+        data = pickle.loads(pickled)
+        self.__dict__.update(data)
+
+
+    def _cfg_restore(self, cfg):
+        """To recover cfg after being unpickled"""
+        self.__init__(cfg)
 
 
 # if __name__ == '__main__':
